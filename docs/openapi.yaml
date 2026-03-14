@@ -1,0 +1,1167 @@
+openapi: 3.0.3
+info:
+  title: EdgeFlux API
+  version: 1.0.0
+  description: |
+    OpenAPI description of the HTTP endpoints implemented by the EdgeFlux server.
+    This spec covers the REST API, health endpoint, and server-sent events stream.
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+tags:
+  - name: system
+  - name: events
+  - name: devices
+  - name: enrollment
+  - name: deploy
+  - name: config
+  - name: pki
+paths:
+  /healthz:
+    get:
+      tags: [system]
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthzResponse'
+
+  /events:
+    get:
+      tags: [events]
+      summary: Stream live events over SSE
+      operationId: streamEvents
+      responses:
+        '200':
+          description: Server-sent events stream with init and event messages
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: init
+                  data: {"type":"init","stats":{"total_events":0},"devices":[]}
+
+                  event: event
+                  data: {"id":1,"timestamp":"2026-03-14T10:00:00Z","level":"INFO","source":"server","message":"Platform ready"}
+
+  /api/v1/stats:
+    get:
+      tags: [system]
+      summary: Get aggregate platform stats
+      operationId: getStats
+      responses:
+        '200':
+          description: Aggregate counters for devices and events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+
+  /api/v1/devices:
+    get:
+      tags: [devices]
+      summary: List all devices
+      operationId: listDevices
+      responses:
+        '200':
+          description: Current device state list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DeviceState'
+    post:
+      tags: [devices]
+      summary: Create a pending device
+      operationId: createDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDeviceRequest'
+      responses:
+        '201':
+          description: Device created in pending state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDeviceResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+    delete:
+      tags: [devices]
+      summary: Delete one device or purge legacy devices
+      operationId: deleteDevices
+      parameters:
+        - name: device_id
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Device ID to delete
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [legacy]
+          description: When set to legacy, removes devices with no NICs and no authorized keys
+      responses:
+        '200':
+          description: Delete or purge completed
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DeleteDeviceResponse'
+                  - $ref: '#/components/schemas/PurgeLegacyResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '404':
+          $ref: '#/components/responses/Error404'
+
+  /api/v1/events:
+    get:
+      tags: [events]
+      summary: List stored events
+      operationId: listEvents
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: Return events with an ID greater than this value
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 200
+      responses:
+        '200':
+          description: Stored events in ascending ID order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+
+  /api/v1/pki/info:
+    get:
+      tags: [pki]
+      summary: Get PKI metadata
+      operationId: getPKIInfo
+      responses:
+        '200':
+          description: Root and intermediate CA metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PKIInfo'
+
+  /api/v1/enroll:
+    post:
+      tags: [enrollment]
+      summary: Enroll a device certificate
+      operationId: enrollDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollRequest'
+      responses:
+        '200':
+          description: Device certificate issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+        '202':
+          description: Enrollment is waiting for operator approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          description: Device has been revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+        '500':
+          description: Enrollment failed while issuing a certificate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+
+  /api/v1/devices/{deviceId}:
+    get:
+      tags: [devices]
+      summary: Get one device
+      operationId: getDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Device state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceState'
+        '404':
+          $ref: '#/components/responses/Error404'
+
+  /api/v1/devices/{deviceId}/events:
+    get:
+      tags: [devices, events]
+      summary: List events for one device
+      operationId: listDeviceEvents
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 200
+      responses:
+        '200':
+          description: Device events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+
+  /api/v1/devices/{deviceId}/vault:
+    get:
+      tags: [devices]
+      summary: Get the approved cert record from Vault
+      operationId: getDeviceVaultRecord
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Vault record for the approved device certificate
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VaultRecord'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '503':
+          $ref: '#/components/responses/Error503'
+
+  /api/v1/devices/{deviceId}/approve:
+    post:
+      tags: [devices]
+      summary: Approve a device for enrollment
+      operationId: approveDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Device approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusDeviceResponse'
+
+  /api/v1/devices/{deviceId}/revoke:
+    post:
+      tags: [devices]
+      summary: Revoke a device certificate
+      operationId: revokeDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+      responses:
+        '200':
+          description: Device revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusDeviceResponse'
+
+  /api/v1/devices/{deviceId}/reboot:
+    post:
+      tags: [devices]
+      summary: Mark a device as rebooting and waiting to reconnect
+      operationId: rebootDevice
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Device moved back to a pending reconnect state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusDeviceResponse'
+
+  /api/v1/devices/{deviceId}/health:
+    post:
+      tags: [devices]
+      summary: Submit a device health heartbeat
+      operationId: postDeviceHealth
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HealthRequest'
+      responses:
+        '200':
+          description: Health accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '403':
+          description: Device should disconnect due to revocation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '409':
+          description: Device should re-enroll
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/v1/devices/{deviceId}/containers:
+    get:
+      tags: [devices, deploy]
+      summary: Inspect container state and desired specs for one device
+      operationId: getDeviceContainers
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Current container status and desired specs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceContainersResponse'
+        '404':
+          $ref: '#/components/responses/Error404'
+    post:
+      tags: [devices, deploy]
+      summary: Queue a custom container for deployment
+      operationId: addDeviceContainer
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomContainerRequest'
+      responses:
+        '200':
+          description: Container was queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomContainerResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+
+  /api/v1/devices/{deviceId}/containers/{name}:
+    delete:
+      tags: [devices, deploy]
+      summary: Remove a queued or known container
+      operationId: removeDeviceContainer
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: URL-escaped container name
+      responses:
+        '200':
+          description: Container removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteContainerResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '404':
+          $ref: '#/components/responses/Error404'
+
+  /api/v1/devices/{deviceId}/simulate:
+    post:
+      tags: [devices]
+      summary: Start a local simulator container for the device
+      operationId: startDeviceSimulation
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SimulatorStartRequest'
+      responses:
+        '200':
+          description: Simulator started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulatorStartResponse'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+    get:
+      tags: [devices]
+      summary: Inspect simulator status for the device
+      operationId: getDeviceSimulation
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Simulator state or suggested exec command
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SimulatorStatus'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+    delete:
+      tags: [devices]
+      summary: Remove the local simulator container for the device
+      operationId: deleteDeviceSimulation
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Simulator removed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusDeviceResponse'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+
+  /api/v1/deploy/{deviceId}/os:
+    get:
+      tags: [deploy]
+      summary: Get the OS deployment manifest
+      operationId: getOSManifest
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: OS image deployment manifest
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OSManifest'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '409':
+          $ref: '#/components/responses/Error409'
+
+  /api/v1/deploy/{deviceId}/containers:
+    get:
+      tags: [deploy]
+      summary: Get the container deployment manifest
+      operationId: getContainerManifest
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: Container deployment manifest and registry details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeployContainersResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '409':
+          $ref: '#/components/responses/Error409'
+
+  /api/v1/config/{deviceId}/ssh:
+    get:
+      tags: [config]
+      summary: Get SSH configuration for the device
+      operationId: getSSHConfig
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+      responses:
+        '200':
+          description: SSH authorized keys, sshd settings, and relay tunnel info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SSHConfig'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '409':
+          $ref: '#/components/responses/Error409'
+
+components:
+  parameters:
+    DeviceId:
+      name: deviceId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Unique device ID
+
+  responses:
+    Error400:
+      description: Request could not be processed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error404:
+      description: Requested resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error409:
+      description: Request conflicts with the device state
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error500:
+      description: Server-side error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error503:
+      description: Feature is disabled or unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    HealthzResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+      required: [status]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Stats:
+      type: object
+      properties:
+        total_events:
+          type: integer
+        total_mqtt:
+          type: integer
+        total_devices:
+          type: integer
+        enrolled:
+          type: integer
+        operational:
+          type: integer
+        pending:
+          type: integer
+        revoked:
+          type: integer
+        connected:
+          type: integer
+      required:
+        - total_events
+        - total_mqtt
+        - total_devices
+        - enrolled
+        - operational
+        - pending
+        - revoked
+        - connected
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [INFO, OK, WARN, ERROR, MQTT, TLS]
+        source:
+          type: string
+        device_id:
+          type: string
+        message:
+          type: string
+        topic:
+          type: string
+        phase:
+          type: string
+        data:
+          description: Event-specific payload
+          nullable: true
+      required:
+        - id
+        - timestamp
+        - level
+        - source
+        - message
+
+    NIC:
+      type: object
+      properties:
+        name:
+          type: string
+        mac:
+          type: string
+        ip:
+          type: string
+        cidr:
+          type: string
+        vlan:
+          type: integer
+        state:
+          type: string
+      required: [name]
+
+    AuthorizedKey:
+      type: object
+      properties:
+        comment:
+          type: string
+        public_key:
+          type: string
+        access_level:
+          type: string
+      required: [public_key]
+
+    DeviceState:
+      type: object
+      properties:
+        device_id:
+          type: string
+        phase:
+          type: string
+        status:
+          type: string
+        approval_status:
+          type: string
+        approved_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          nullable: true
+        revocation_reason:
+          type: string
+        enrolled_at:
+          type: string
+          format: date-time
+          nullable: true
+        cert_serial:
+          type: string
+        cert_thumbprint:
+          type: string
+        cert_not_after:
+          type: string
+          format: date-time
+          nullable: true
+        nics:
+          type: array
+          items:
+            $ref: '#/components/schemas/NIC'
+        authorized_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthorizedKey'
+        os_deployed:
+          type: boolean
+        containers:
+          type: object
+          additionalProperties:
+            type: string
+        ssh_configured:
+          type: boolean
+        ssh_tunnel:
+          type: string
+        mtls_established:
+          type: boolean
+        last_seen:
+          type: string
+          format: date-time
+        last_health:
+          type: string
+          format: date-time
+          nullable: true
+        health_messages:
+          type: integer
+        connection_alive:
+          type: boolean
+        mqtt_messages:
+          type: integer
+      required:
+        - device_id
+        - phase
+        - status
+        - os_deployed
+        - containers
+        - ssh_configured
+        - mtls_established
+        - last_seen
+        - health_messages
+        - connection_alive
+        - mqtt_messages
+
+    EnrollRequest:
+      type: object
+      properties:
+        device_id:
+          type: string
+        csr_pem:
+          type: string
+        hw_attestation:
+          type: string
+        firmware_hash:
+          type: string
+        profile:
+          type: string
+      required: [device_id]
+
+    EnrollResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+        status:
+          type: string
+          enum: [enrolled, pending_approval, revoked, error]
+        cert_pem:
+          type: string
+        ca_cert_pem:
+          type: string
+        cert_serial:
+          type: string
+        cert_thumbprint:
+          type: string
+        error:
+          type: string
+        next_step:
+          type: string
+      required:
+        - device_id
+        - status
+
+    CreateDeviceRequest:
+      type: object
+      properties:
+        device_id:
+          type: string
+        profile:
+          type: string
+        nics:
+          type: array
+          items:
+            $ref: '#/components/schemas/NIC'
+        authorized_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthorizedKey'
+        simulate:
+          type: boolean
+      required: [device_id]
+
+    CreateDeviceResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        device_id:
+          type: string
+        simulate_status:
+          type: string
+          enum: [unavailable, failed, started]
+        simulate_error:
+          type: string
+        simulator_container_id:
+          type: string
+      required:
+        - status
+        - device_id
+
+    DeleteDeviceResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: deleted
+        device_id:
+          type: string
+      required: [status, device_id]
+
+    PurgeLegacyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        removed:
+          type: array
+          items:
+            type: string
+        count:
+          type: integer
+      required: [status, removed, count]
+
+    CertificateInfo:
+      type: object
+      properties:
+        subject:
+          type: string
+        serial:
+          type: string
+        thumbprint:
+          type: string
+        not_after:
+          type: string
+          format: date-time
+        issuer:
+          type: string
+
+    PKIInfo:
+      type: object
+      properties:
+        root_ca:
+          $ref: '#/components/schemas/CertificateInfo'
+        intermediate_ca:
+          $ref: '#/components/schemas/CertificateInfo'
+
+    VaultRecord:
+      type: object
+      additionalProperties: true
+      description: Arbitrary KV record returned from Vault for an approved certificate
+
+    RevokeRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+
+    StatusDeviceResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        device_id:
+          type: string
+      required: [status, device_id]
+
+    HealthRequest:
+      type: object
+      properties:
+        device_id:
+          type: string
+        cert_serial:
+          type: string
+        status:
+          type: string
+        cpu_percent:
+          type: number
+          format: double
+        mem_percent:
+          type: number
+          format: double
+        uptime_seconds:
+          type: integer
+          format: int64
+        running_containers:
+          type: array
+          items:
+            type: string
+        meta:
+          type: object
+          additionalProperties: true
+      required: [status]
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        action:
+          type: string
+          enum: [none, disconnect, reenroll]
+        message:
+          type: string
+      required: [status, action]
+
+    Container:
+      type: object
+      properties:
+        name:
+          type: string
+        image:
+          type: string
+        ports:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        read_only_rootfs:
+          type: boolean
+        no_new_privileges:
+          type: boolean
+        seccomp_profile:
+          type: string
+      required:
+        - name
+        - image
+        - read_only_rootfs
+        - no_new_privileges
+        - seccomp_profile
+
+    DeviceContainersResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+        containers:
+          type: object
+          additionalProperties:
+            type: string
+        specs:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Container'
+      required: [device_id, containers, specs]
+
+    CustomContainerRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        image:
+          type: string
+        ports:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        read_only_rootfs:
+          type: boolean
+        no_new_privileges:
+          type: boolean
+        seccomp_profile:
+          type: string
+      required: [name, image]
+
+    CustomContainerResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: queued
+        device_id:
+          type: string
+        container:
+          $ref: '#/components/schemas/Container'
+        total_containers:
+          type: integer
+      required: [status, device_id, container, total_containers]
+
+    DeleteContainerResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: removed
+        device_id:
+          type: string
+        name:
+          type: string
+      required: [status, device_id, name]
+
+    SimulatorStartRequest:
+      type: object
+      properties:
+        profile:
+          type: string
+
+    SimulatorStartResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: started
+        device_id:
+          type: string
+        container_id:
+          type: string
+      required: [status, device_id, container_id]
+
+    SimulatorStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [found, not_found]
+        device_id:
+          type: string
+        name:
+          type: string
+        container_id:
+          type: string
+        image:
+          type: string
+        container_status:
+          type: string
+        running:
+          type: boolean
+        exec_cmd:
+          type: string
+      required: [status, device_id, exec_cmd]
+
+    OSManifest:
+      type: object
+      properties:
+        image:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        sha256:
+          type: string
+        sig_algo:
+          type: string
+        dm_verity:
+          type: boolean
+        rootfs_mode:
+          type: string
+        kernel:
+          type: string
+        features:
+          type: array
+          items:
+            type: string
+      required:
+        - image
+        - size_bytes
+        - sha256
+        - sig_algo
+        - dm_verity
+        - rootfs_mode
+        - kernel
+        - features
+
+    DeployContainersResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+        containers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Container'
+        registry:
+          type: string
+        auth:
+          type: string
+      required: [device_id, containers, registry, auth]
+
+    SSHKey:
+      type: object
+      properties:
+        type:
+          type: string
+        public_key:
+          type: string
+        comment:
+          type: string
+        access_level:
+          type: string
+      required: [type, public_key, comment, access_level]
+
+    Tunnel:
+      type: object
+      properties:
+        relay_host:
+          type: string
+        relay_port:
+          type: integer
+        device_alias:
+          type: string
+        auth_method:
+          type: string
+      required: [relay_host, relay_port, device_alias, auth_method]
+
+    SSHConfig:
+      type: object
+      properties:
+        authorized_keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/SSHKey'
+        sshd_config:
+          type: object
+          additionalProperties: true
+        tunnel:
+          $ref: '#/components/schemas/Tunnel'
+      required: [authorized_keys, sshd_config, tunnel]

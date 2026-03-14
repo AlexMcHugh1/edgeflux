@@ -1,0 +1,129 @@
+services:
+  sqlite:
+    image: alpine:3.20
+    command: ["sh", "-c", "touch /data/edgeflux.db && tail -f /dev/null"]
+    volumes:
+      - sqlite-data:/data
+
+  sqlite-web:
+    image: coleifer/sqlite-web:latest
+    platform: linux/amd64
+    command: ["sqlite_web", "/data/edgeflux.db", "--host", "0.0.0.0", "--port", "8080"]
+    ports:
+      - "8081:8080"
+    volumes:
+      - sqlite-data:/data
+    depends_on:
+      - sqlite
+
+  vault:
+    image: hashicorp/vault:1.17
+    command: server -dev -dev-root-token-id=root -dev-listen-address=0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=root
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault-data:/vault/file
+
+  edgeflux-server:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.server
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - certs:/app/certs
+      - sqlite-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CERTS_DIR=/app/certs
+      - DEVICE_DB_PATH=/app/data/edgeflux.db
+      - LISTEN_ADDR=:8080
+      - DEVICE_CERT_TTL_MINUTES=10
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=root
+      - LOCAL_SIMULATOR_ENABLED=true
+      - LOCAL_SIMULATOR_AUTO_CREATE=false
+      - LOCAL_SIMULATOR_DOCKER_CMD=docker
+      - LOCAL_SIMULATOR_IMAGE=edgeflux-edgeflux-agent:latest
+      - LOCAL_SIMULATOR_SERVER_URL=http://edgeflux-server:8080
+      - LOCAL_SIMULATOR_NETWORK=edgeflux_default
+      - LOCAL_SIMULATOR_NAME_PREFIX=edgeflux-sim-
+    depends_on:
+      - sqlite
+      - vault
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Local-only simulator mode: enables server-triggered docker run for per-device simulators.
+  # Start with: docker compose --profile local-sim up -d edgeflux-server-sim sqlite vault
+  edgeflux-server-sim:
+    profiles: ["local-sim"]
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.server
+    ports:
+      - "${LOCAL_SIM_SERVER_PORT:-18080}:8080"
+      - "${LOCAL_SIM_TLS_PORT:-18443}:8443"
+    volumes:
+      - certs:/app/certs
+      - sqlite-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - CERTS_DIR=/app/certs
+      - DEVICE_DB_PATH=/app/data/edgeflux.db
+      - LISTEN_ADDR=:8080
+      - DEVICE_CERT_TTL_MINUTES=10
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN=root
+      - LOCAL_SIMULATOR_ENABLED=true
+      - LOCAL_SIMULATOR_AUTO_CREATE=true
+      - LOCAL_SIMULATOR_DOCKER_CMD=docker
+      - LOCAL_SIMULATOR_IMAGE=edgeflux-edgeflux-agent:latest
+      - LOCAL_SIMULATOR_SERVER_URL=http://edgeflux-server-sim:8080
+      - LOCAL_SIMULATOR_NETWORK=edgeflux_default
+      - LOCAL_SIMULATOR_NAME_PREFIX=edgeflux-sim-
+    depends_on:
+      - sqlite
+      - vault
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    ports:
+      - "8883:8883"
+      - "1883:1883"
+    volumes:
+      - ./configs/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - certs:/mosquitto/certs:ro
+    depends_on:
+      edgeflux-server:
+        condition: service_healthy
+
+  edgeflux-agent:
+    build:
+      context: .
+      dockerfile: deployments/Dockerfile.agent
+    environment:
+      - SERVER_URL=http://edgeflux-server:8080
+      - PROFILE=alpine-edge-secure
+    depends_on:
+      edgeflux-server:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  certs:
+  vault-data:
+  sqlite-data:
